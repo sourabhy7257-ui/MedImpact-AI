@@ -1,104 +1,201 @@
-from typing import List
+import re
+from typing import Dict, List
 
 from src.evidence.evidence_schema import (
     EvidenceItem,
     VerifiedClaim,
 )
-
+from src.evidence.claim_schema import MedicalClaim
 from src.evidence.pubmed_evidence import PubMedEvidenceBuilder
+
+
+STOP_WORDS = {
+    "the",
+    "a",
+    "an",
+    "and",
+    "or",
+    "of",
+    "in",
+    "to",
+    "for",
+    "with",
+    "on",
+    "is",
+    "are",
+    "was",
+    "were",
+    "among",
+    "combined",
+}
 
 
 class ClaimVerifier:
     """
     First-stage deterministic claim verifier.
 
-    This component identifies whether retrieved evidence is
-    relevant to a claim. It does not establish medical causality
-    or clinical efficacy.
+    Checks population, intervention, and outcome separately.
+    It does not establish causality or clinical efficacy.
     """
 
     def verify(
         self,
-        claim: str,
+        claim: MedicalClaim,
         evidence_items: List[EvidenceItem],
     ) -> VerifiedClaim:
 
-        if not claim or not claim.strip():
-            raise ValueError("claim must not be empty")
+        if not claim.claim_text.strip():
+            raise ValueError("claim_text must not be empty")
 
         if not evidence_items:
             return VerifiedClaim(
-                claim=claim,
+                claim=claim.claim_text,
                 status="INSUFFICIENT",
                 confidence="LOW",
                 supporting_evidence=[],
                 rationale="No evidence was retrieved.",
             )
 
-        claim_terms = self._extract_terms(claim)
         relevant_evidence = []
+        assessments = []
 
         for item in evidence_items:
-            evidence_text = (
+
+            text = (
                 f"{item.source.title} "
                 f"{item.evidence_text}"
             ).lower()
 
-            matched_terms = [
-                term
-                for term in claim_terms
-                if term in evidence_text
-            ]
+            population_match = self._component_match(
+                claim.population,
+                text,
+            )
 
-            if matched_terms:
+            intervention_match = self._component_match(
+                claim.intervention,
+                text,
+            )
+
+            outcome_match = self._component_match(
+                claim.outcome,
+                text,
+            )
+
+            assessment = {
+                "pmid": item.source.identifier,
+                "population": population_match,
+                "intervention": intervention_match,
+                "outcome": outcome_match,
+            }
+
+            assessments.append(assessment)
+
+            if (
+                population_match == "MATCH"
+                and intervention_match == "MATCH"
+                and outcome_match == "MATCH"
+            ):
                 relevant_evidence.append(item)
 
         if not relevant_evidence:
+            rationale = self._build_rationale(assessments)
+
             return VerifiedClaim(
-                claim=claim,
+                claim=claim.claim_text,
                 status="INSUFFICIENT",
                 confidence="LOW",
                 supporting_evidence=[],
-                rationale=(
-                    "Retrieved evidence did not contain "
-                    "sufficient matching terminology."
-                ),
+                rationale=rationale,
             )
 
+        rationale = (
+            f"{len(relevant_evidence)} source(s) matched "
+            "the population, intervention, and outcome. "
+            "Direction of effect has not yet been verified."
+        )
+
         return VerifiedClaim(
-            claim=claim,
+            claim=claim.claim_text,
             status="RELEVANT_EVIDENCE_FOUND",
             confidence="LOW",
             supporting_evidence=relevant_evidence,
-            rationale=(
-                f"{len(relevant_evidence)} retrieved source(s) "
-                "contained terminology relevant to the claim. "
-                "This does not establish that the claim is "
-                "causally or clinically supported."
-            ),
+            rationale=rationale,
         )
 
     @staticmethod
-    def _extract_terms(claim: str) -> List[str]:
-        stop_words = {
-            "the", "a", "an", "and", "or", "of",
-            "in", "to", "for", "with", "on", "is", "are",
-        }
-
-        terms = [
-            word.strip(".,:;!?()[]{}").lower()
-            for word in claim.split()
-        ]
+    def _normalize(text: str) -> List[str]:
+        words = re.findall(r"[a-z0-9]+", text.lower())
 
         return [
-            term
-            for term in terms
-            if len(term) > 2 and term not in stop_words
+            word
+            for word in words
+            if word not in STOP_WORDS and len(word) > 2
         ]
+
+    def _component_match(
+        self,
+        claim_component: str,
+        evidence_text: str,
+    ) -> str:
+
+        claim_terms = set(self._normalize(claim_component))
+        evidence_terms = set(self._normalize(evidence_text))
+
+        if not claim_terms:
+            return "NO_MATCH"
+
+        matched_terms = claim_terms.intersection(evidence_terms)
+
+        overlap = len(matched_terms) / len(claim_terms)
+
+        if overlap >= 0.75:
+            return "MATCH"
+
+        if overlap >= 0.40:
+            return "PARTIAL"
+
+        return "NO_MATCH"
+
+    @staticmethod
+    def _build_rationale(
+        assessments: List[Dict[str, str]],
+    ) -> str:
+
+        lines = [
+            "No retrieved source matched all required "
+            "claim components."
+        ]
+
+        for assessment in assessments:
+            lines.append(
+                f"PMID {assessment['pmid']}: "
+                f"population={assessment['population']}, "
+                f"intervention={assessment['intervention']}, "
+                f"outcome={assessment['outcome']}"
+            )
+
+        lines.append(
+            "This assessment checks terminology overlap only "
+            "and does not establish causality or clinical efficacy."
+        )
+
+        return "\n".join(lines)
 
 
 def main():
-    claim = "HbA1c diabetes management"
+
+    claim = MedicalClaim(
+        claim_text=(
+            "Low-carbohydrate diet combined with exercise "
+            "reduces HbA1c in adults with type 2 diabetes."
+        ),
+        population="Adults with type 2 diabetes",
+        intervention=(
+            "Low-carbohydrate diet combined with exercise"
+        ),
+        outcome="HbA1c",
+        expected_direction="decrease",
+    )
 
     print("=" * 60)
     print("MedImpact AI - Claim Verifier")
@@ -106,7 +203,9 @@ def main():
 
     builder = PubMedEvidenceBuilder(max_results=5)
 
-    evidence_items = builder.build_evidence(claim)
+    evidence_items = builder.build_evidence(
+        claim.claim_text
+    )
 
     print(f"\nEvidence retrieved: {len(evidence_items)}")
 
@@ -124,7 +223,9 @@ def main():
         f"Supporting evidence: "
         f"{len(result.supporting_evidence)}"
     )
-    print(f"Rationale: {result.rationale}")
+
+    print("\nRationale:")
+    print(result.rationale)
 
     for item in result.supporting_evidence:
         print("\n" + "-" * 60)

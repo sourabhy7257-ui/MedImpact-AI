@@ -10,32 +10,54 @@ from src.evidence.pubmed_evidence import PubMedEvidenceBuilder
 
 
 STOP_WORDS = {
-    "the",
-    "a",
-    "an",
-    "and",
-    "or",
-    "of",
-    "in",
-    "to",
-    "for",
-    "with",
-    "on",
-    "is",
-    "are",
-    "was",
-    "were",
-    "among",
-    "combined",
+    "the", "a", "an", "and", "or", "of", "in", "to",
+    "for", "with", "on", "is", "are", "was", "were",
+    "among", "combined",
+}
+
+
+DIRECTION_TERMS = {
+    "decrease": {
+        "decrease",
+        "decreased",
+        "decrease",
+        "reduces",
+        "reduce",
+        "reduced",
+        "reduction",
+        "lower",
+        "lowered",
+        "lowering",
+        "improved",
+        "improvement",
+        "decline",
+        "declined",
+        "decrement",
+    },
+    "increase": {
+        "increased",
+        "increase",
+        "increases",
+        "higher",
+        "elevated",
+        "elevation",
+        "raising",
+        "raised",
+        "improvement",
+        "gain",
+    },
 }
 
 
 class ClaimVerifier:
     """
-    First-stage deterministic claim verifier.
+    First-stage deterministic medical claim verifier.
 
-    Checks population, intervention, and outcome separately.
-    It does not establish causality or clinical efficacy.
+    Checks population, intervention, outcome, and direction
+    using transparent terminology-based rules.
+
+    This component does not establish causality, clinical
+    efficacy, or medical safety.
     """
 
     def verify(
@@ -81,11 +103,17 @@ class ClaimVerifier:
                 text,
             )
 
+            direction_match = self._direction_match(
+                claim.expected_direction,
+                text,
+            )
+
             assessment = {
                 "pmid": item.source.identifier,
                 "population": population_match,
                 "intervention": intervention_match,
                 "outcome": outcome_match,
+                "direction": direction_match,
             }
 
             assessments.append(assessment)
@@ -94,6 +122,7 @@ class ClaimVerifier:
                 population_match == "MATCH"
                 and intervention_match == "MATCH"
                 and outcome_match == "MATCH"
+                and direction_match == "SUPPORTS"
             ):
                 relevant_evidence.append(item)
 
@@ -110,8 +139,10 @@ class ClaimVerifier:
 
         rationale = (
             f"{len(relevant_evidence)} source(s) matched "
-            "the population, intervention, and outcome. "
-            "Direction of effect has not yet been verified."
+            "the population, intervention, outcome, and "
+            "claimed direction of effect. This terminology-"
+            "based assessment does not establish causality, "
+            "clinical efficacy, or evidence quality."
         )
 
         return VerifiedClaim(
@@ -157,13 +188,78 @@ class ClaimVerifier:
         return "NO_MATCH"
 
     @staticmethod
+    def _direction_match(
+        expected_direction: str,
+        evidence_text: str,
+    ) -> str:
+
+        if expected_direction not in DIRECTION_TERMS:
+            return "UNCLEAR"
+
+        positive_terms = DIRECTION_TERMS[expected_direction]
+
+        opposite_direction = (
+            "increase"
+            if expected_direction == "decrease"
+            else "decrease"
+        )
+
+        opposite_terms = DIRECTION_TERMS[opposite_direction]
+
+        text = re.sub(r"\s+", " ", evidence_text.lower())
+
+        # Detect explicit negation before checking positive terms.
+        negation_patterns = [
+            r"\bno\s+(?:significant\s+)?{term}\b",
+            r"\bnot\s+(?:significantly\s+)?{term}\b",
+            r"\bdid\s+not\s+{term}\b",
+            r"\bdidn't\s+{term}\b",
+            r"\bfailed\s+to\s+{term}\b",
+            r"\bwithout\s+(?:a\s+)?{term}\b",
+        ]
+
+        for term in positive_terms:
+            for pattern in negation_patterns:
+                if re.search(
+                    pattern.format(term=re.escape(term)),
+                    text,
+                ):
+                    return "CONTRADICTS"
+
+        positive_matches = [
+            term
+            for term in positive_terms
+            if re.search(
+                rf"\b{re.escape(term)}\b",
+                text,
+            )
+        ]
+
+        if positive_matches:
+            return "SUPPORTS"
+
+        opposite_matches = [
+            term
+            for term in opposite_terms
+            if re.search(
+                rf"\b{re.escape(term)}\b",
+                text,
+            )
+        ]
+
+        if opposite_matches:
+            return "CONTRADICTS"
+
+        return "UNCLEAR"
+
+    @staticmethod
     def _build_rationale(
         assessments: List[Dict[str, str]],
     ) -> str:
 
         lines = [
             "No retrieved source matched all required "
-            "claim components."
+            "claim components and direction."
         ]
 
         for assessment in assessments:
@@ -171,11 +267,12 @@ class ClaimVerifier:
                 f"PMID {assessment['pmid']}: "
                 f"population={assessment['population']}, "
                 f"intervention={assessment['intervention']}, "
-                f"outcome={assessment['outcome']}"
+                f"outcome={assessment['outcome']}, "
+                f"direction={assessment['direction']}"
             )
 
         lines.append(
-            "This assessment checks terminology overlap only "
+            "This assessment uses terminology matching only "
             "and does not establish causality or clinical efficacy."
         )
 

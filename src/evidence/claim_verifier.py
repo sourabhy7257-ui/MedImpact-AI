@@ -18,13 +18,13 @@ STOP_WORDS = {
 
 DIRECTION_TERMS = {
     "decrease": {
-        "decrease",
-        "decreased",
-        "decrease",
-        "reduces",
         "reduce",
         "reduced",
+        "reduces",
         "reduction",
+        "decrease",
+        "decreased",
+        "decreases",
         "lower",
         "lowered",
         "lowering",
@@ -35,15 +35,14 @@ DIRECTION_TERMS = {
         "decrement",
     },
     "increase": {
-        "increased",
         "increase",
+        "increased",
         "increases",
         "higher",
         "elevated",
         "elevation",
         "raising",
         "raised",
-        "improvement",
         "gain",
     },
 }
@@ -78,8 +77,8 @@ class ClaimVerifier:
                 rationale="No evidence was retrieved.",
             )
 
-        relevant_evidence = []
         assessments = []
+        supporting_evidence = []
 
         for item in evidence_items:
 
@@ -124,32 +123,37 @@ class ClaimVerifier:
                 and outcome_match == "MATCH"
                 and direction_match == "SUPPORTS"
             ):
-                relevant_evidence.append(item)
+                supporting_evidence.append(item)
 
-        if not relevant_evidence:
-            rationale = self._build_rationale(assessments)
+        overall_status = self._overall_status(assessments)
 
-            return VerifiedClaim(
-                claim=claim.claim_text,
-                status="INSUFFICIENT",
-                confidence="LOW",
-                supporting_evidence=[],
-                rationale=rationale,
-            )
+        if overall_status == "SUPPORTED":
+            confidence = "LOW"
+        elif overall_status == "CONTRADICTED":
+            confidence = "LOW"
+        elif overall_status == "PARTIAL":
+            confidence = "LOW"
+        else:
+            confidence = "LOW"
 
-        rationale = (
-            f"{len(relevant_evidence)} source(s) matched "
-            "the population, intervention, outcome, and "
-            "claimed direction of effect. This terminology-"
-            "based assessment does not establish causality, "
-            "clinical efficacy, or evidence quality."
+        rationale = self._build_rationale(
+            assessments,
+            overall_status,
+        )
+
+        best_assessment = self._select_best_assessment(
+            assessments
         )
 
         return VerifiedClaim(
             claim=claim.claim_text,
-            status="RELEVANT_EVIDENCE_FOUND",
-            confidence="LOW",
-            supporting_evidence=relevant_evidence,
+            status=overall_status,
+            confidence=confidence,
+            supporting_evidence=supporting_evidence,
+            population_match=best_assessment["population"],
+            intervention_match=best_assessment["intervention"],
+            outcome_match=best_assessment["outcome"],
+            direction_match=best_assessment["direction"],
             rationale=rationale,
         )
 
@@ -208,7 +212,6 @@ class ClaimVerifier:
 
         text = re.sub(r"\s+", " ", evidence_text.lower())
 
-        # Detect explicit negation before checking positive terms.
         negation_patterns = [
             r"\bno\s+(?:significant\s+)?{term}\b",
             r"\bnot\s+(?:significantly\s+)?{term}\b",
@@ -253,13 +256,85 @@ class ClaimVerifier:
         return "UNCLEAR"
 
     @staticmethod
-    def _build_rationale(
+    def _overall_status(
         assessments: List[Dict[str, str]],
     ) -> str:
 
+        if not assessments:
+            return "INSUFFICIENT"
+
+        for assessment in assessments:
+            if (
+                assessment["population"] == "MATCH"
+                and assessment["intervention"] == "MATCH"
+                and assessment["outcome"] == "MATCH"
+                and assessment["direction"] == "SUPPORTS"
+            ):
+                return "SUPPORTED"
+
+        for assessment in assessments:
+            if (
+                assessment["population"] == "MATCH"
+                and assessment["intervention"] == "MATCH"
+                and assessment["outcome"] == "MATCH"
+                and assessment["direction"] == "CONTRADICTS"
+            ):
+                return "CONTRADICTED"
+
+        for assessment in assessments:
+            matched_components = sum(
+                value in {"MATCH", "PARTIAL"}
+                for key, value in assessment.items()
+                if key != "pmid"
+            )
+
+            if matched_components >= 2:
+                return "PARTIAL"
+
+        return "INSUFFICIENT"
+
+    @staticmethod
+    def _select_best_assessment(
+        assessments: List[Dict[str, str]],
+    ) -> Dict[str, str]:
+
+        if not assessments:
+            return {
+                "population": "UNCLEAR",
+                "intervention": "UNCLEAR",
+                "outcome": "UNCLEAR",
+                "direction": "UNCLEAR",
+            }
+
+        def score(assessment):
+            weights = {
+                "MATCH": 2,
+                "PARTIAL": 1,
+                "NO_MATCH": 0,
+                "SUPPORTS": 2,
+                "CONTRADICTS": 2,
+                "UNCLEAR": 0,
+            }
+
+            return sum(
+                weights.get(
+                    value,
+                    0,
+                )
+                for key, value in assessment.items()
+                if key != "pmid"
+            )
+
+        return max(assessments, key=score)
+
+    @staticmethod
+    def _build_rationale(
+        assessments: List[Dict[str, str]],
+        overall_status: str,
+    ) -> str:
+
         lines = [
-            "No retrieved source matched all required "
-            "claim components and direction."
+            f"Overall evidence assessment: {overall_status}.",
         ]
 
         for assessment in assessments:
@@ -272,8 +347,9 @@ class ClaimVerifier:
             )
 
         lines.append(
-            "This assessment uses terminology matching only "
-            "and does not establish causality or clinical efficacy."
+            "This assessment uses deterministic terminology "
+            "matching and does not establish causality, "
+            "clinical efficacy, or evidence quality."
         )
 
         return "\n".join(lines)
@@ -316,8 +392,15 @@ def main():
     print(f"\nClaim: {result.claim}")
     print(f"Status: {result.status}")
     print(f"Confidence: {result.confidence}")
+
+    print("\nBest evidence assessment:")
+    print(f"Population: {result.population_match}")
+    print(f"Intervention: {result.intervention_match}")
+    print(f"Outcome: {result.outcome_match}")
+    print(f"Direction: {result.direction_match}")
+
     print(
-        f"Supporting evidence: "
+        f"\nSupporting evidence: "
         f"{len(result.supporting_evidence)}"
     )
 

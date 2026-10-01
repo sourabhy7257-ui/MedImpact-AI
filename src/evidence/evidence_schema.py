@@ -4,10 +4,6 @@ from typing import List, Optional
 
 @dataclass
 class EvidenceSource:
-    """
-    Represents a medical evidence source used by MedImpact AI.
-    """
-
     title: str
     source_type: str
     organization: str
@@ -19,11 +15,6 @@ class EvidenceSource:
 
 @dataclass
 class EvidenceItem:
-    """
-    Represents a specific piece of evidence supporting or challenging
-    a medical claim.
-    """
-
     claim: str
     evidence_text: str
     source: EvidenceSource
@@ -34,15 +25,16 @@ class EvidenceItem:
 
 @dataclass
 class VerifiedClaim:
-    """
-    Represents the final evidence-verification result for a claim.
-    """
-
     claim: str
     status: str
     confidence: str
     supporting_evidence: List[EvidenceItem] = field(
         default_factory=list
     )
-    rationale: str = ""
 
+    population_match: str = "UNCLEAR"
+    intervention_match: str = "UNCLEAR"
+    outcome_match: str = "UNCLEAR"
+    direction_match: str = "UNCLEAR"
+
+    rationale: str = ""

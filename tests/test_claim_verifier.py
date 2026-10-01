@@ -59,3 +59,67 @@ def test_negated_intervention_effect():
     )
     result = ClaimVerifier._direction_match("decrease", text)
     assert result == "CONTRADICTS"
+
+
+def test_overall_status_supported():
+    assessments = [
+        {
+            "pmid": "1",
+            "population": "MATCH",
+            "intervention": "MATCH",
+            "outcome": "MATCH",
+            "direction": "SUPPORTS",
+        }
+    ]
+
+    result = ClaimVerifier._overall_status(assessments)
+
+    assert result == "SUPPORTED"
+
+
+def test_overall_status_contradicted():
+    assessments = [
+        {
+            "pmid": "2",
+            "population": "MATCH",
+            "intervention": "MATCH",
+            "outcome": "MATCH",
+            "direction": "CONTRADICTS",
+        }
+    ]
+
+    result = ClaimVerifier._overall_status(assessments)
+
+    assert result == "CONTRADICTED"
+
+
+def test_overall_status_partial():
+    assessments = [
+        {
+            "pmid": "3",
+            "population": "MATCH",
+            "intervention": "PARTIAL",
+            "outcome": "MATCH",
+            "direction": "SUPPORTS",
+        }
+    ]
+
+    result = ClaimVerifier._overall_status(assessments)
+
+    assert result == "PARTIAL"
+
+
+def test_overall_status_insufficient():
+    assessments = [
+        {
+            "pmid": "4",
+            "population": "NO_MATCH",
+            "intervention": "NO_MATCH",
+            "outcome": "NO_MATCH",
+            "direction": "UNCLEAR",
+        }
+    ]
+
+    result = ClaimVerifier._overall_status(assessments)
+
+    assert result == "INSUFFICIENT"
